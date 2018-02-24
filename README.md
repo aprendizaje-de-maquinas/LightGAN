@@ -1,5 +1,7 @@
 This is an implementation of what we call a LightGAN. A GAN using the LightRNN structure from Microsoft Research to implement language modeling at a large scale. 
 
+The data that is used for this project is from the SNAP lab at Stanford and is not publically available so we cannot post the data that we used.
+
 Created for CS230 at Stanford.
 
 To Stanford students: do not use this code for Stanford projects without proper attributation as that would be a breach of the honor code. 
