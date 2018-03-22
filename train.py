@@ -3,7 +3,7 @@ This module implements the train loop for curriculum training
 '''
 import model_and_data_serialization
 from config import *
-from single_run import run
+from single_run import run, test
 from summaries import log_run_settings
 
 import os
@@ -26,33 +26,41 @@ inv_wordmap = None
 stages = range(FLAGS.START_SEQ, FLAGS.END_SEQ)
 
 # controls the number of meta iterations (ie the number of reallocs to perform per sequence_length)
-num = 2
+num = 1
+beam_length = 1000
+seq_len_to_test = 4
 
-for i in range(len(stages)):
-    # get the correct stage and prev_seq_len (for loading correct file)
-    if FLAGS.TRAIN_FROM_CKPT:
-        prev_seq_length = stages[i]
-    else:
-        prev_seq_length = stages[i-1] if i > 0 else 0
-    seq_length = stages[i]
-
-
-    # loop permeta iter
-    for j in range(num):
-        print("********************Training on Seq Len = %d, BATCH SIZE: %d, META ITER: %d********************"\
-              % (seq_length, BATCH_SIZE, j))
-
+if FLAGS.TESTING:
+    for i in range(1, 9):
         tf.reset_default_graph()
-        iterations = FLAGS.ITERATIONS_PER_SEQ_LENGTH
 
-        param = prev_seq_length if j == 0 else seq_length
-        first = seq_length == stages[0] and not (FLAGS.TRAIN_FROM_CKPT) and j == 0
+        test(beam_length, i, BATCH_SIZE, i)
+else:
+    for i in range(len(stages)):
+        # get the correct stage and prev_seq_len (for loading correct file)
+        if FLAGS.TRAIN_FROM_CKPT:
+            prev_seq_length = stages[i]
+        else:
+            prev_seq_length = stages[i-1] if i > 0 else 0
+        seq_length = stages[i]
 
-        # run one single meta iter
-        run(iterations, seq_length, first, wordmap, inv_wordmap, param, j, num)
 
-        # make sure to remove unnecessary files created
-        if j != num -1:
-            copyfile('locations/word-%d.locations' % (seq_length+1), \
-                     'locations/word-%d.locations' % (seq_length))
-            os.remove('locations/word-%d.locations' % (seq_length+1))
+        # loop permeta iter
+        for j in range(num):
+            print("********************Training on Seq Len = %d, BATCH SIZE: %d, META ITER: %d********************"\
+                  % (seq_length, BATCH_SIZE, j))
+
+            tf.reset_default_graph()
+            iterations = FLAGS.ITERATIONS_PER_SEQ_LENGTH
+
+            param = prev_seq_length if j == 0 else seq_length
+            first = seq_length == stages[0] and not (FLAGS.TRAIN_FROM_CKPT) and j == 0
+
+            # run one single meta iter
+            run(iterations, seq_length, first, wordmap, inv_wordmap, param, j, num)
+
+            # make sure to remove unnecessary files created
+            if j != num -1 and FLAGS.WORDVECS is None:
+                copyfile('locations/word-%d.locations' % (seq_length+1), \
+                         'locations/word-%d.locations' % (seq_length))
+                os.remove('locations/word-%d.locations' % (seq_length+1))

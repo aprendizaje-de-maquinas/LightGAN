@@ -4,6 +4,7 @@ This Module implements the Generator and Discriminator Netoworks
 import tensorflow as tf
 from lightrnn import LightLSTM
 from config import *
+import numpy as np
 
 # this simplifies the rnn
 embed_dim = FLAGS.DISC_STATE_SIZE
@@ -11,7 +12,7 @@ embed_dim = FLAGS.DISC_STATE_SIZE
 DROPOUT = 0.75
 
 
-def discriminator(inputs, wordmap_len, seq_len, reuse=False):
+def discriminator(inputs, wordmap_len, seq_len, reuse=False, lengths=None):
     '''
     This dunction creates a discriminator network
 
@@ -26,21 +27,19 @@ def discriminator(inputs, wordmap_len, seq_len, reuse=False):
 
         # the embeding layers. mapping from the seqrt of vocab size to the num units in LSTM
         init = tf.random_uniform_initializer(minval=-0.1, maxval=0.1)
-        weight_r = tf.get_variable('embedding_r', shape=[wordmap_len, embed_dim], initializer=init)
-        weight_c = tf.get_variable('embedding_c', shape=[wordmap_len, embed_dim], initializer=init)
+
+        if FLAGS.WORDVECS is not None:
+            r = np.load(FLAGS.WORDVECS+'/row.npy')
+            c = np.load(FLAGS.WORDVECS+'/col.npy')
+            weight_r = tf.constant(r, name='embedding_r')
+            weight_c = tf.constant(c, name='embedding_c')
+        else:
+            weight_r = tf.get_variable('embedding_r', shape=[wordmap_len, embed_dim], initializer=init)
+            weight_c = tf.get_variable('embedding_c', shape=[wordmap_len, embed_dim], initializer=init)
 
         # these are extra weights for if we make embed_dim different from num_neurons
         #w1 = tf.get_variable('w_r', shape=[embed_dim, num_neurons], initializer=init)
         #w2 = tf.get_variable('w_c', shape=[embed_dim, num_neurons], initializer=init)
-
-
-        # create the LightLSTM cells for the rnn
-        cells = []
-        for scope in range(FLAGS.DISC_GRU_LAYERS):
-            cell = LightLSTM(num_neurons, num_neurons, scope=scope)
-            #cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=DROPOUT)
-            cells.append(cell)
-        cell = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
 
         # we cannot perform matmul on  three dimensional input so reshape to two
         flat_inputs_r = tf.reshape(inputs[0], [-1, wordmap_len])
@@ -60,14 +59,35 @@ def discriminator(inputs, wordmap_len, seq_len, reuse=False):
         # the LightLSTM assumes the row is stacked on top of column
         inputs = tf.concat([inputs_r, inputs_c], axis=0)
 
+        # create the LightLSTM cells for the rnn
+        mechanism = tf.contrib.seq2seq.LuongAttention(num_neurons, inputs)
+
+        cells = []
+        for scope in range(FLAGS.DISC_GRU_LAYERS):
+            cell = LightLSTM(num_neurons, num_neurons, scope=scope)
+            cell = tf.contrib.rnn.AttentionCellWrapper(cell, 10, state_is_tuple=True)
+
+            cells.append(cell)
+        cell = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
+
+
+        #mechanism = tf.contrib.seq2seq.LuongAttention(num_neurons, inputs)
+        #cell = tf.contrib.seq2seq.AttentionWrapper(cell, mechanism, output_attention=True)
+        #init_ = cell.zero_state(BATCH_SIZE*2, dtype=tf.float32)
         # unstack based on time step and run through rnn
         inputs = tf.unstack(tf.transpose(inputs, [1, 0, 2]))
-        output, state = tf.contrib.rnn.static_rnn(cell, inputs, dtype=tf.float32)
+        #print('to dynamic')
+        #output, state = tf.nn.dynamic_rnn(cell, inputs,  initial_state=init_, dtype=tf.float32)
+
+        #output, state = tf.contrib.rnn.static_rnn(cell, inputs, dtype=tf.float32)
+        output, _ = tf.nn.static_rnn(cell, inputs, dtype=tf.float32) #, sequence_length=lengths)
+
 
         # concat the state and the output from the last layer of the rnn
-        state = tf.reshape(state[-1], [-1, num_neurons])
+        #state = tf.reshape(state[-1], [-1, num_neurons])
         last = tf.reshape(output[-1], [-1, num_neurons])
-        last = tf.concat([last, state], axis=1)
+        #last = tf.concat([last, state], axis=1)
+
 
         # perform fully connected layer to 1 output (ie is this batch real or fake)
         shape = last.get_shape().as_list()[1]
@@ -88,6 +108,9 @@ def generator(n_samples, wordmap_len, naw_r, naw_c, seq_len=None, gt=None):
     seq_len = the length of the sequence to generate
     gt = the ground truth inputs (ie the subtrings for us to predict the next word of)
     '''
+    attention = True
+
+
     with tf.variable_scope('Generator'):
         # noise for the initial states
         noise, _ = get_noise()
@@ -97,8 +120,13 @@ def generator(n_samples, wordmap_len, naw_r, naw_c, seq_len=None, gt=None):
         cells = []
         for scope in range(FLAGS.GEN_GRU_LAYERS):
             cell = LightLSTM(num_neurons, num_neurons, scope=scope)
-            #cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=DROPOUT)
+
+            if attention:
+                cell = tf.contrib.rnn.AttentionCellWrapper(cell, 10, state_is_tuple=True)
+
             cells.append(cell)
+
+        cells = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
 
         # create the initial states for the training and inference predictions
         train_i_states, infer_i_states = create_initial_states(noise), create_initial_states(noise)
@@ -114,11 +142,18 @@ def generator(n_samples, wordmap_len, naw_r, naw_c, seq_len=None, gt=None):
                                                 maxval=.1), name='sftmax-c-b')
 
         # the emedding matrices for the row (1) and col (2)
-        embedding1 = tf.Variable(tf.random_uniform([wordmap_len, embed_dim], \
-                                                  minval=-0.1, maxval=.1), name='embed-r')
-        embedding2 = tf.Variable(tf.random_uniform([wordmap_len, embed_dim], \
-                                                  minval=-0.1, maxval=.1), name='embed-c')
+        if FLAGS.WORDVECS is not None:
+            r = np.load(FLAGS.WORDVECS+'/row.npy')
+            c = np.load(FLAGS.WORDVECS+'/col.npy')
+            embedding1 = tf.constant(r, name='embed-r')
+            embedding2 = tf.constant(c, name='embed-c')
+        else:
+            embedding1 = tf.Variable(tf.random_uniform([wordmap_len, embed_dim], \
+                                                       minval=-0.1, maxval=.1), name='embed-r')
+            embedding2 = tf.Variable(tf.random_uniform([wordmap_len, embed_dim], \
+                                                       minval=-0.1, maxval=.1), name='embed-c')
 
+        embeddings = tf.reshape(tf.matmul(embedding1, tf.transpose(embedding2)), [-1,1])
         # group the row and col parameters together for ease of passing
         sm_weight = [sm_weight1, sm_weight2]
         sm_bias = [sm_bias1, sm_bias2]
@@ -135,6 +170,17 @@ def generator(n_samples, wordmap_len, naw_r, naw_c, seq_len=None, gt=None):
         # group
         word_input = [word_input1, word_input2]
 
+        if attention:
+            train_i = cells.zero_state(BATCH_SIZE*2, dtype=tf.float32)
+            st_tmp_t = tuple([ tuple([train_i_states[i], train_i[i][1], train_i[i][2]]) for i in range(len(train_i_states))])
+            train_i_states = st_tmp_t
+            infer_i = cells.zero_state(BATCH_SIZE*2, dtype=tf.float32)
+            st_tmp_i = tuple([ tuple([infer_i_states[i], infer_i[i][1], infer_i[i][2]]) for i in range(len(infer_i_states))])
+            infer_i_states = st_tmp_i
+
+
+
+
         # get the op for training (ie using the gt_inputs) and for reallocing (ie probabilities of each word from softmax)
         train_pred, realloc_pred = get_train_op(cells, word_input, wordmap_len, \
                                                 embedding, gt, n_samples, num_neurons, seq_len, \
@@ -144,8 +190,7 @@ def generator(n_samples, wordmap_len, naw_r, naw_c, seq_len=None, gt=None):
                                         sm_bias, sm_weight, infer_i_states, \
                                         num_neurons, wordmap_len, reuse=True)
 
-        return train_pred, inference_op, realloc_pred
-
+        return train_pred, inference_op, realloc_pred, embeddings
 
 def create_initial_states(noise):
     '''
@@ -208,6 +253,8 @@ def get_train_op(cells, word_input, wordmap_len, embedding, gt, n_samples, \
     # note that we pad the strings at the front with <naw> tokens
     train_pred1, train_pred2 = [], []
     for i in range(seq_len):
+        #tmp1 = tf.zeros([BATCH_SIZE, seq_len-i-1, wordmap_len])
+        #tmp2 = tf.zeros([BATCH_SIZE, seq_len-i-1, wordmap_len])
         tmp1 = tf.concat([tf.zeros([BATCH_SIZE, seq_len-i-1, naw_r]), \
                           tf.ones([BATCH_SIZE, seq_len-i-1, 1]), \
                           tf.zeros([BATCH_SIZE, seq_len-i-1, wordmap_len - naw_r-1])], axis=2)
@@ -225,9 +272,13 @@ def get_train_op(cells, word_input, wordmap_len, embedding, gt, n_samples, \
     # reshape the lists to tensors and randomly select BATCH_SIZE strings
     train_pred1 = tf.reshape(train_pred1, [BATCH_SIZE*seq_len, seq_len, wordmap_len])
     train_pred2 = tf.reshape(train_pred2, [BATCH_SIZE*seq_len, seq_len, wordmap_len])
-    #indices = tf.random_uniform([BATCH_SIZE], 0, BATCH_SIZE*seq_len, dtype=tf.int32)
-    #train_pred1 = tf.gather(train_pred1, indices)
-    #train_pred2 = tf.gather(train_pred2, indices)
+
+    num = min(10, seq_len)
+
+    indices = tf.random_shuffle(tf.range(BATCH_SIZE*seq_len))[:BATCH_SIZE*num]
+    #indices = tf.random_uniform([BATCH_SIZE*num], 0, BATCH_SIZE*seq_len, dtype=tf.int32)
+    train_pred1 = tf.gather(train_pred1, indices)
+    train_pred2 = tf.gather(train_pred2, indices)
 
     # realloc is supposed to the log softmax
     return [train_pred1, train_pred2], [tf.log(realloc_1), tf.log(realloc_2)]
@@ -249,26 +300,40 @@ def rnn_step_prediction(cells, wordmap_len, gt_sentence_input, num_neurons, \
     # ensure resue
     with tf.variable_scope("rnn", reuse=reuse):
         output = gt_sentence_input
-        for l in range(FLAGS.GEN_GRU_LAYERS):
-            # run the update for each layer of the rnn and update its state
-            output, states[l] = tf.nn.dynamic_rnn(cells[l], output, \
-                                                  dtype=tf.float32,
-                                                  initial_state=states[l], \
-                                                  scope="layer_%d" % (l + 1))
+
+        #for l in range(FLAGS.GEN_GRU_LAYERS):
+        #   # run the update for each layer of the rnn and update its state
+        #   output, states[l] = tf.nn.dynamic_rnn(cells[l], output, \
+        #                                         dtype=tf.float32,
+        #                                         initial_state=states[l], \
+        #                                         scope="layer_%d" % (l + 1))
+
+        output, states = tf.nn.dynamic_rnn(cells, output, dtype=tf.float32, initial_state=states , scope='layer_%d'% 1)
+        #output, states = tf.nn.static_rnn(cells, tf.unstack(tf.transpose(output,[1,0,2])), dtype=tf.float32)
+        #output = tf.transpose(tf.stack(output,0), [1,0,2])
+
 
     # output is row and col stacked on top of each other
     row, col = tf.split(output, 2, 0)
 
-
-    row = tf.nn.dropout(row, DROPOUT)
-    col = tf.nn.dropout(col, DROPOUT)
+    if not FLAGS.TESTING:
+        row = tf.nn.dropout(row, DROPOUT)
+        col = tf.nn.dropout(col, DROPOUT)
 
     # reshape and perform softmax prediction on the outputs of the RNN
     row = tf.reshape(row, [-1, num_neurons])
-    row = tf.nn.softmax(tf.matmul(row, sm_weight[0]) + sm_bias[0])
+    if not FLAGS.TESTING:
+        row = tf.nn.softmax(tf.matmul(row, sm_weight[0]) + sm_bias[0])
+    else:
+        row = tf.matmul(row, sm_weight[0]) + sm_bias[0]
+
     row = tf.reshape(row, [BATCH_SIZE, -1, wordmap_len])
     col = tf.reshape(col, [-1, num_neurons])
-    col = tf.nn.softmax(tf.matmul(col, sm_weight[1]) + sm_bias[1])
+    if not FLAGS.TESTING:
+        col = tf.nn.softmax(tf.matmul(col, sm_weight[1]) + sm_bias[1])
+    else:
+        col = tf.matmul(col, sm_weight[1]) + sm_bias[1]
+
     col = tf.reshape(col, [BATCH_SIZE, -1, wordmap_len])
 
     return row, col, states
@@ -298,6 +363,7 @@ def get_inference_op(cells, word_input, embedding, seq_len, \
     # group for easy access
     embed_pred = [[word_input[0]], [word_input[1]]]
 
+
     for i in range(seq_len):
         # concat along the sequence dimension and then concat the row and col
         e_pred = tf.concat([tf.concat(embed_pred[0], 1), tf.concat(embed_pred[1], 1)], 0)
@@ -312,13 +378,19 @@ def get_inference_op(cells, word_input, embedding, seq_len, \
         best_words_tensor_r = tf.argmax(step_pred_r, axis=2)
         best_words_one_hot_tensor_r = tf.one_hot(best_words_tensor_r, wordmap_len)
         best_word_r = best_words_one_hot_tensor_r[:, -1, :]
-        inference_pred_r.append(tf.expand_dims(best_word_r, 1))
+
+        #inference_pred_r.append(tf.expand_dims(best_word_r, 1))
+        inference_pred_r.append(tf.expand_dims(step_pred_r[:,-1,:],1)) # swap to this so that we can beam
+
         embed_pred[0].append(tf.expand_dims(tf.matmul(best_word_r, embedding[0]), 1))
 
         best_words_tensor_c = tf.argmax(step_pred_c, axis=2)
         best_words_one_hot_tensor_c = tf.one_hot(best_words_tensor_c, wordmap_len)
         best_word_c = best_words_one_hot_tensor_c[:, -1, :]
-        inference_pred_c.append(tf.expand_dims(best_word_c, 1))
+
+        #inference_pred_c.append(tf.expand_dims(best_word_c, 1))
+        inference_pred_c.append(tf.expand_dims(step_pred_c[:,-1,:],1)) # swap to this so that we can beam
+
         embed_pred[1].append(tf.expand_dims(tf.matmul(best_word_c, embedding[1]), 1))
 
         reuse = True

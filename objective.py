@@ -26,31 +26,30 @@ def get_optimization_ops(disc_cost, gen_cost, global_step):
     global_step = the current step
     '''
 
-    # get the correct paramaeters for G and D to ensure that the updates are applied to the correct params
-    gen_params = params_with_name('Generator')
-    disc_params = params_with_name('Discriminator')
+    with tf.name_scope('optimizers'):
+        # get the correct paramaeters for G and D to ensure that the updates are applied to the correct params
+        gen_params = params_with_name('Generator')
+        disc_params = params_with_name('Discriminator')
 
-    # a paper suggests using the square of the global norm to regularize the generator
-    # this gives decreased perfromance so we have it noted in the comments
-    scale = 0.0
-    reg = 0
-    #reg = tf.square(tf.global_norm(tf.gradients(disc_cost, disc_params)))
-    #scale = 0.5
+        # a paper suggests using the square of the global norm to regularize the generator
+        # this gives decreased perfromance so we have it noted in the comments
+        scale = 0.0
+        reg = 0
+        #reg = tf.square(tf.global_norm(tf.gradients(disc_cost, disc_params)))
+        #scale = 0.5
 
-    # use Adam for the gen and disc training make sure to apply to the correct var_list
-    gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, \
-                                          beta1=0.9, \
-                                          beta2=0.990).minimize(gen_cost+scale*reg, \
-                                                              var_list=gen_params, \
-                                                              global_step=global_step)
-    disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, \
-                                           beta1=0.9, \
-                                           beta2=0.999).minimize(disc_cost, \
-                                                               var_list=disc_params)
-    return disc_train_op, gen_train_op
+        # use Adam for the gen and disc training make sure to apply to the correct var_list
+        gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, \
+                                              beta1=0.5, beta2=0.9).minimize(gen_cost+scale*reg, \
+                                                                             var_list=gen_params, \
+                                                                             global_step=global_step)
+        disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, \
+                                               beta1=0.5, beta2=0.9).minimize(disc_cost, \
+                                                                              var_list=disc_params)
+        return disc_train_op, gen_train_op
 
 
-def get_substrings_from_gt(real_inputs, seq_length, wordmap_len, naw_r, naw_c ):
+def get_substrings_from_gt(sess, real_inputs, seq_length, wordmap_len, naw_r, naw_c, gen, discrete):
     '''
     This function takes the gt and first creates BATCH_SIZE*seq_len substrings from the
     inputs and then randomly selects BATCH_SIZE versions from that.
@@ -62,31 +61,67 @@ def get_substrings_from_gt(real_inputs, seq_length, wordmap_len, naw_r, naw_c ):
     naw_r = the row index of the <naw> token in the map
     naw_c = the col index of the <naw> token in the map
     '''
-    train_pred_r = []
-    train_pred_c = []
+    with tf.name_scope('build_substrings'):
 
-    # extract the substrings from the inputs and pad the beginings with the <naw> token
-    for i in range(seq_length):
+        train_pred_r = []
+        train_pred_c = []
 
-        tmp1 = tf.concat( [ tf.zeros( [BATCH_SIZE ,  seq_length-i-1 , naw_r ] ) ,\
-                            tf.ones( [BATCH_SIZE , seq_length-i-1 , 1 ])  , \
-                            tf.zeros( [BATCH_SIZE , seq_length-i-1 , wordmap_len - naw_r-1 ] ) ] , axis=2)
-        tmp2 = tf.concat( [ tf.zeros( [BATCH_SIZE ,  seq_length-i-1 , naw_c ] ) ,\
-                            tf.ones( [BATCH_SIZE , seq_length-i-1 , 1 ])  , \
-                            tf.zeros( [BATCH_SIZE , seq_length-i-1 , wordmap_len - naw_c-1 ] ) ] , axis=2)
-        train_pred_r.append( tf.concat([tmp1, real_inputs[0][:, :i + 1]], axis=1))
-        train_pred_c.append( tf.concat([tmp2, real_inputs[1][:, :i + 1]], axis=1))
+        row_where = tf.equal(tf.argmax(real_inputs[0], axis=2), naw_r)
+        col_where = tf.equal(tf.argmax(real_inputs[1], axis=2), naw_c)
+        naw_where = tf.multiply(tf.cast(row_where,tf.int64), tf.cast(col_where, tf.int64))
 
-    # reshape the lists into tensors and randomly select BATCH_SIZE inputs from it
-    all_sub_strings_r = tf.reshape(train_pred_r, [BATCH_SIZE * seq_length, seq_length, wordmap_len])
-    all_sub_strings_c = tf.reshape(train_pred_c, [BATCH_SIZE * seq_length, seq_length, wordmap_len])
-    #indices = tf.random_uniform([BATCH_SIZE], 1, all_sub_strings_r.get_shape()[0], dtype=tf.int32)
-    #all_sub_strings = [ tf.gather(all_sub_strings_r, indices)[:BATCH_SIZE] , tf.gather(all_sub_strings_c, indices)[:BATCH_SIZE] ]
-    all_sub_strings = [ all_sub_strings_r, all_sub_strings_c]
-    return all_sub_strings
+        def indexd(t):
+            return tf.reduce_min(tf.where(tf.equal(t,1)))
+
+        idx = tf.map_fn(indexd, naw_where)
+        idx = tf.minimum(idx, seq_length)
+        #idx = tf.maximum(idx, 2)
+        idx = tf.cast(idx, tf.int32)
+
+        mins = []
+
+        # extract the substrings from the inputs and pad the beginings with the <naw> token
+        for i in range(seq_length):
+
+            tmp1 = tf.concat( [ tf.zeros( [BATCH_SIZE ,   seq_length-i-1 , naw_r ] ) ,\
+                                tf.ones( [BATCH_SIZE , seq_length-i-1 , 1 ])  , \
+                                tf.zeros( [BATCH_SIZE , seq_length-i-1 , wordmap_len - naw_r-1 ] ) ] , axis=2)
+            tmp2 = tf.concat( [ tf.zeros( [BATCH_SIZE ,   seq_length-i-1 , naw_c ] ) ,\
+                                tf.ones( [BATCH_SIZE , seq_length-i-1 , 1 ])  , \
+                                tf.zeros( [BATCH_SIZE , seq_length-i-1 , wordmap_len - naw_c-1 ] ) ] , axis=2)
+
+            to_append = tf.cast(tf.greater(idx, i*tf.ones_like(idx)), tf.int32)
+
+            length = tf.gather((i)*tf.ones_like(idx), to_append)
+            mins.append(length)
+
+            r = tf.gather(tf.concat([tmp1, real_inputs[0][:,:i+1]], 1), to_append)
+            c = tf.gather(tf.concat([tmp2, real_inputs[1][:,:i+1]], 1), to_append)
+
+            train_pred_r.append(r)
+            train_pred_c.append(c)
 
 
-def define_objective(wordmap, real_inputs_discrete, seq_length , naw_r , naw_c ):
+
+        # reshape the lists into tensors and randomly select BATCH_SIZE inputs from it
+
+        all_sub_strings_r = tf.reshape(tf.concat(train_pred_r, 0), [-1, seq_length, wordmap_len])
+        all_sub_strings_c = tf.reshape(tf.concat(train_pred_c, 0), [-1, seq_length, wordmap_len])
+        lengths = tf.concat(mins, 0)
+
+        num = min(10, seq_length)
+
+        indices = tf.random_uniform([BATCH_SIZE*num], 1, tf.reduce_sum(idx), dtype=tf.int32)
+
+        all_sub_strings = [ tf.gather(all_sub_strings_r, indices)[:BATCH_SIZE*num] , \
+                            tf.gather(all_sub_strings_c, indices)[:BATCH_SIZE*num]]
+
+        lengths = tf.concat([tf.gather(lengths, indices)[:BATCH_SIZE*num], tf.gather(lengths, indices)[:BATCH_SIZE*num]],0)
+
+    return all_sub_strings, lengths
+
+
+def define_objective(sess, wordmap, real_inputs_discrete, seq_length , naw_r , naw_c , gen):
     '''
     This function creates the network and returns the ops for training, inference, and summaries
 
@@ -101,40 +136,51 @@ def define_objective(wordmap, real_inputs_discrete, seq_length , naw_r , naw_c )
     bound = ceil( sqrt( len(wordmap) ) )
 
     # one hot the inputs
-    real_inputs_r = tf.one_hot(real_inputs_discrete[0], bound )
-    real_inputs_c = tf.one_hot(real_inputs_discrete[1], bound )
-    real_inputs = [ real_inputs_r , real_inputs_c ]
+    with tf.name_scope('gan-inputs'):
+        real_inputs_r = tf.one_hot(real_inputs_discrete[0], bound )
+        real_inputs_c = tf.one_hot(real_inputs_discrete[1], bound )
+        real_inputs = [ real_inputs_r , real_inputs_c ]
 
     # rename the gen and dsic
     Generator = generator
     Discriminator = discriminator
 
-    # make the gnerator
-    train_pred, inference_op, realloc_op = Generator(BATCH_SIZE, bound , naw_r , naw_c , seq_len=seq_length, gt=real_inputs)
+    with tf.name_scope('GAN'):
+        # make the gnerator
+        train_pred, inference_op, realloc_op, embeddings = Generator(BATCH_SIZE, bound , naw_r , naw_c , \
+                                                                     seq_len=seq_length, gt=real_inputs)
 
-    # extract the gt substrings for training the discriminator on real data
-    real_inputs_substrings = get_substrings_from_gt(real_inputs, seq_length, bound , naw_r , naw_c)
+        # extract the gt substrings for training the discriminator on real data
+        real_inputs_substrings, lengths = get_substrings_from_gt(sess, real_inputs, seq_length, bound, naw_r, \
+                                                                 naw_c, gen, real_inputs_discrete)
 
-    # make the discriminator for the real batch
-    disc_real = Discriminator(real_inputs_substrings, bound, seq_length, reuse=False)
+        with tf.name_scope('disc_real'):
+            # make the discriminator for the real batch
+            disc_real = Discriminator(real_inputs_substrings, bound, seq_length, reuse=False, lengths=lengths)
 
-    # make the discriminator for the fake batch
-    # note that reuse must be true
-    disc_fake = Discriminator(train_pred, bound , seq_length, reuse=True)
+        with tf.name_scope('disc_fake'):
+            # make the discriminator for the fake batch
+            # note that reuse must be true
+            disc_fake = Discriminator(train_pred, bound , seq_length, reuse=True, lengths=tf.ones([BATCH_SIZE*5*2])*seq_length)
 
-    # this can be used to create another discriminator for the inference op
-    # ie if you wanted to score the inferenced ops
-    disc_on_inference = None
+        # this can be used to create another discriminator for the inference op
+        # ie if you wanted to score the inferenced ops
+        disc_on_inference = None
 
-    # create ops for the accuracy of the discriminator on the real and fake data
-    d_cost_fake = tf.reduce_mean(tf.cast(tf.less(disc_fake, 0.0), tf.float32))
-    d_cost_real = tf.reduce_mean(tf.cast(tf.greater(disc_real, 0.0), tf.float32))
+        # create ops for the accuracy of the discriminator on the real and fake data
+        d_cost_fake = tf.reduce_mean(tf.cast(tf.less(disc_fake, 0.0), tf.float32))
+        d_cost_real = tf.reduce_mean(tf.cast(tf.greater(disc_real, 0.0), tf.float32))
 
-    # create the costs to be optimized
-    disc_cost, gen_cost = loss_d_g(disc_fake, disc_real, train_pred, inference_op, real_inputs_substrings, wordmap, seq_length, Discriminator)
+        # create the costs to be optimized
+        disc_cost, gen_cost = loss_d_g(disc_fake, disc_real, train_pred, inference_op, real_inputs_substrings, wordmap, seq_length, Discriminator)
 
+        optim_costs = [disc_cost, gen_cost]
+        discs = [disc_fake, disc_real, disc_on_inference]
+        ops = [train_pred, inference_op, realloc_op]
+        log_costs = [d_cost_fake, d_cost_real]
 
-    return disc_cost, gen_cost, train_pred, disc_fake, disc_real, disc_on_inference, inference_op, realloc_op, d_cost_fake, d_cost_real
+    return optim_costs, discs, ops, log_costs, embeddings
+    #return disc_cost, gen_cost, train_pred, disc_fake, disc_real, disc_on_inference, inference_op, realloc_op, d_cost_fake, d_cost_real
 
 
 def loss_d_g(disc_fake, disc_real, fake_inputs, inf_outputs, real_inputs, wordmap, seq_length, Discriminator):
@@ -143,51 +189,47 @@ def loss_d_g(disc_fake, disc_real, fake_inputs, inf_outputs, real_inputs, wordma
     '''
 
     # this is the WGAN cost
-    disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
-    gen_cost = -tf.reduce_mean(disc_fake)
+    with tf.name_scope('losses'):
+        disc_cost = tf.subtract(tf.reduce_mean(disc_fake), tf.reduce_mean(disc_real), name='disc_cost')
+        #disc_cost = tf.reduce_mean(disc_fake) - tf.reduce_mean(disc_real)
+        #gen_cost = -tf.reduce_mean(disc_fake)
+        gen_cost = tf.negative(tf.reduce_mean(disc_fake), name='gen_cost')
+
 
     # this is the creation of the GP for the discriminator
-    alpha1 = tf.random_uniform(shape=[tf.shape(real_inputs[0])[0], 1, 1], minval=0., maxval=1.)
-    alpha2 = tf.random_uniform(shape=[tf.shape(real_inputs[1])[0], 1, 1], minval=0., maxval=1.)
+    with tf.name_scope('gradient-penalty'):
+        num = min(10, seq_length)
 
-    differences1 = fake_inputs[0] - real_inputs[0]
-    differences2 = fake_inputs[1] - real_inputs[1]
+        alpha1 = tf.random_uniform(shape=[BATCH_SIZE*num, 1, 1], minval=0., maxval=1.)
+        alpha2 = tf.random_uniform(shape=[BATCH_SIZE*num, 1, 1], minval=0., maxval=1.)
 
-    bound = ceil(sqrt(len(wordmap)))
+        indices = tf.random_uniform([tf.shape(fake_inputs[0])[0]], 0, tf.shape(real_inputs[0])[0], dtype=tf.int32)
+        real_inputs1 = tf.gather(real_inputs[0], indices)
+        real_inputs2 = tf.gather(real_inputs[1], indices)
+        #real_inputs1 = real_inputs[0]
+        #real_inputs2 = real_inputs[1]
 
-    interpolates = [real_inputs[0] + alpha1*differences1, real_inputs[1] + alpha2*differences2]
 
-    gradients1 = tf.gradients(Discriminator(interpolates, bound, seq_length, reuse=True), [interpolates[0]])[0]
-    gradients2 = tf.gradients(Discriminator(interpolates, bound, seq_length, reuse=True), [interpolates[1]])[0]
+        differences1 = fake_inputs[0] - real_inputs1
+        differences2 = fake_inputs[1] - real_inputs2
 
-    slopes1 = tf.sqrt(tf.reduce_sum(tf.square(gradients1), reduction_indices=[1, 2]))
-    slopes2 = tf.sqrt(tf.reduce_sum(tf.square(gradients2), reduction_indices=[1, 2]))
+        bound = ceil(sqrt(len(wordmap)))
 
-    gradient_penalty1 = tf.reduce_mean((slopes1 - 1.) ** 2)
-    gradient_penalty2 = tf.reduce_mean((slopes2 - 1.) ** 2)
+        interpolates = [real_inputs1 + alpha1*differences1, real_inputs2 + alpha2*differences2]
 
-    # average the gradient penalties
-    disc_cost += LAMBDA/2 * gradient_penalty1 + LAMBDA/2 * gradient_penalty2
+        with tf.name_scope('interpolate_gradients'):
+            gradients1 = tf.gradients(Discriminator(interpolates, bound, seq_length, reuse=True), \
+                                      [interpolates[0]], name='row_grads')[0]
+            gradients2 = tf.gradients(Discriminator(interpolates, bound, seq_length, reuse=True), \
+                                      [interpolates[1]], name='col_grads')[0]
+
+        slopes1 = tf.sqrt(tf.reduce_sum(tf.square(gradients1), reduction_indices=[1, 2]))
+        slopes2 = tf.sqrt(tf.reduce_sum(tf.square(gradients2), reduction_indices=[1, 2]))
+
+        gradient_penalty1 = tf.reduce_mean((slopes1 - 1.) ** 2)
+        gradient_penalty2 = tf.reduce_mean((slopes2 - 1.) ** 2)
+
+        # average the gradient penalties
+        disc_cost += LAMBDA/2 * gradient_penalty1 + LAMBDA/2 * gradient_penalty2
 
     return disc_cost, gen_cost
-
-
-
-if __name__ == '__main__':
-
-
-    b_size = 2
-    seq_len = 2
-    vocab = 5
-
-    gt_r = 3
-    gt_c = 2
-    tmp  = tf.concat([tf.zeros([b_size, seq_len, gt_r]), \
-                        tf.ones([b_size, seq_len, 1]), tf.zeros([b_size, seq_len, vocab - gt_r-1])], axis=2)
-
-
-    with tf.Session() as sess:
-
-        t = sess.run(tmp)
-        print(t)
-        print(t.shape)

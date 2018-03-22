@@ -13,20 +13,23 @@ flags.DEFINE_string('LOGS_DIR', './logs/', '')
 flags.DEFINE_string('DATA_DIR', './data/', "")
 flags.DEFINE_string('CKPT_PATH', "./ckpt/", "")
 flags.DEFINE_integer('BATCH_SIZE', 20, '')
-flags.DEFINE_integer('CRITIC_ITERS', 10, '')
+flags.DEFINE_integer('CRITIC_ITERS', 5, '')
 flags.DEFINE_integer('LAMBDA', 10, '')
 flags.DEFINE_integer('MAX_N_EXAMPLES', 10000000, '')
-flags.DEFINE_integer('GEN_ITERS', 50, '')
-flags.DEFINE_integer('ITERATIONS_PER_SEQ_LENGTH', 5000, '')
+flags.DEFINE_integer('GEN_ITERS', 1, '')
+flags.DEFINE_integer('ITERATIONS_PER_SEQ_LENGTH', 15000, '')
 flags.DEFINE_float('NOISE_STDEV', 10.0, '')
-flags.DEFINE_integer('DISC_STATE_SIZE', 256, '')
-flags.DEFINE_integer('GEN_STATE_SIZE', 256, '')
-flags.DEFINE_integer('GEN_GRU_LAYERS', 1, '')
-flags.DEFINE_integer('DISC_GRU_LAYERS', 1, '')
-flags.DEFINE_integer('START_SEQ', 1, '')
-flags.DEFINE_integer('END_SEQ', 32, '')
+flags.DEFINE_integer('DISC_STATE_SIZE', 512, '')
+flags.DEFINE_integer('GEN_STATE_SIZE', 512, '')
+flags.DEFINE_integer('GEN_GRU_LAYERS', 2, '')
+flags.DEFINE_integer('DISC_GRU_LAYERS', 2, '')
+flags.DEFINE_integer('START_SEQ', 1 , '')
+flags.DEFINE_integer('END_SEQ', 48, '')
 flags.DEFINE_integer('SAVE_CHECKPOINTS_EVERY', 20000, '')
 flags.DEFINE_boolean('TRAIN_FROM_CKPT', False, '')
+flags.DEFINE_boolean('USE_PRETRAIN', False, '')
+flags.DEFINE_boolean('TESTING', True, '')
+flags.DEFINE_string('WORDVECS', 'pretrain/word_vectors', '')
 
 
 FLAGS = flags.FLAGS
@@ -66,3 +69,4 @@ LAMBDA = FLAGS.LAMBDA
 MAX_N_EXAMPLES = FLAGS.MAX_N_EXAMPLES
 CKPT_PATH = FLAGS.CKPT_PATH
 GEN_ITERS = FLAGS.GEN_ITERS
+PRETRAIN = FLAGS.USE_PRETRAIN

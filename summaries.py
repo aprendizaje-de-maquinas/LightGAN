@@ -40,7 +40,9 @@ def log_samples(samples, scores, iteration, seq_length, prefix):
                   'a') as f:
             for s, score in sample_scores:
                 # dont print <naw>
-                a = [ w for w in s if w != "<naw>"]
+                a = [ w for w in s if w != "<naw>" ]
+                if s[-1] == '<naw>':
+                    a.append(s[-1])
                 s = " ".join(a)
                 f.write("%s \t %f\n" % (s, score))
             f.close()
@@ -51,6 +53,8 @@ def log_samples(samples, scores, iteration, seq_length, prefix):
             for s in samples:
                 # dont print <naw>
                 a = [ w for w in s if w != "<naw>"]
+                if s[-1] == '<naw>':
+                    a.append(s[-1])
                 s = " ".join(a)
                 f.write("%s \n" % (s))
             f.close()

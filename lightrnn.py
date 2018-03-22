@@ -19,6 +19,19 @@ class LightLSTM(tf.nn.rnn_cell.RNNCell):
         self._lstm_size = lstm_size
         self._dtype = dtype
 
+        with tf.variable_scope('LightLSTM-' + str(scope)):
+            # for inits
+            dim = self._input_size
+            initializer = tf.random_uniform_initializer(minval=-0.1, maxval=0.1)
+
+            # get the three params for the LightLSTM similar to the params in regular LSTM
+            self.W = tf.get_variable('Matrix', [dim, self._lstm_size*4],\
+                                dtype=self._dtype, initializer=initializer)
+            self.b = tf.get_variable('bias', [self._lstm_size*4],\
+                                dtype=self._dtype, initializer=initializer)
+            self.H = tf.get_variable('H', [self._lstm_size, self._lstm_size*4],\
+                                dtype=self._dtype, initializer=initializer)
+
     @property
     def state_size(self):
         '''
@@ -41,17 +54,19 @@ class LightLSTM(tf.nn.rnn_cell.RNNCell):
         state = dh stacked on top of dc, necesary for internal computations
         '''
         # for inits
-        dim = self._input_size
-        initializer = tf.random_uniform_initializer(minval=-0.1, maxval=0.1)
+        #dim = self._input_size
+        #initializer = tf.random_uniform_initializer(minval=-0.1, maxval=0.1)
 
         # get the three params for the LightLSTM similar to the params in regular LSTM
-        W = tf.get_variable('Matrix', [dim, self._lstm_size*4],\
-                                    dtype=self._dtype, initializer=initializer)
-        b = tf.get_variable('bias', [self._lstm_size*4],\
-                                    dtype=self._dtype, initializer=initializer)
-        H = tf.get_variable('H', [self._lstm_size, self._lstm_size*4],\
-                                    dtype=self._dtype, initializer=initializer)
-
+        #W = tf.get_variable('Matrix', [dim, self._lstm_size*4],\
+        #                           dtype=self._dtype, initializer=initializer)
+        #b = tf.get_variable('bias', [self._lstm_size*4],\
+        #                           dtype=self._dtype, initializer=initializer)
+        #H = tf.get_variable('H', [self._lstm_size, self._lstm_size*4],\
+        #                           dtype=self._dtype, initializer=initializer)
+        W = self.W
+        b = self.b
+        H = self.H
 
         # split the state and the inputs
         dh, dc = tf.split(state, 2, 0)

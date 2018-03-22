@@ -17,6 +17,7 @@ from ctypes import c_double, create_string_buffer
 import ctypes
 from random import shuffle
 from tqdm import tqdm
+from itertools import islice
 
 def _load_dataset(max_length, max_n_examples, max_vocab_size=1000000, data_dir='data/', no_write=False):
     '''
@@ -294,6 +295,51 @@ def inf_train_gen(lines, wordmap, seq_len):
 
     return
 
+def inf_realloc_gen(lines, wordmap, seq_len):
+
+    flg = None
+    while True:
+        np.random.shuffle(lines)
+        if flg is None:
+            flg = False
+        else:
+            flg = True
+
+        for i in range(len(lines)):
+            it = iter(lines[i])
+            result = list(islice(it, seq_len))
+
+            batch_r, batch_c = [], []
+
+            row, col = [], []
+            #if len(result) == seq_len:
+            for j in result:
+                row.append(wordmap[j][0])
+                col.append(wordmap[j][1])
+
+            batch_r.append(row)
+            batch_c.append(col)
+            for elem in it:
+                result = result[1:] + [elem]
+                row = row[1:]+ [wordmap[elem][0]]
+                col = col[1:] +[wordmap[elem][1]]
+
+                batch_r.append(row)
+                batch_c.append(col)
+
+                if len(batch_r) >= BATCH_SIZE:
+                    batch_r = batch_r[:BATCH_SIZE]
+                    batch_c = batch_c[:BATCH_SIZE]
+
+                    r, c = np.array(batch_r, dtype='int32'), np.array(batch_c, dtype='int32')
+
+                    yield [r, c, flg]
+
+                    if elem == '<naw>':
+                        break
+
+                    batch_r, batch_c = [], []
+
 
 def optimistic_restore(session, save_file):
     '''
@@ -377,6 +423,10 @@ def perf_reallocate(iterations, session, inv_wordmap, realloc_op, gen, \
 
             # set up the feed
             _data = next(gen)
+            if _data[2] == True:
+                break
+
+
             f_dict= {real_inputs_discrete[0]:_data[0][:, :seq_len], real_inputs_discrete[1]:_data[1][:, :seq_len]}
 
             # get the log softmax logits
@@ -395,5 +445,5 @@ def perf_reallocate(iterations, session, inv_wordmap, realloc_op, gen, \
             pbar.update( 1 )
 
     # run the allocation
-    _allocate_table(row_loss_vector, col_loss_vector, len(counts), len(inv_wordmap ), seq_len)
+    _allocate_table(col_loss_vector, row_loss_vector, len(counts), len(inv_wordmap ), seq_len)
     return
