@@ -63,7 +63,7 @@ def discriminator(inputs, wordmap_len, seq_len, reuse=False, lengths=None):
         mechanism = tf.contrib.seq2seq.LuongAttention(num_neurons, inputs)
 
         cells = []
-        for scope in range(FLAGS.DISC_GRU_LAYERS):
+        for scope in range(FLAGS.DISC_LSTM_LAYERS):
             cell = LightLSTM(num_neurons, num_neurons, scope=scope)
             cell = tf.contrib.rnn.AttentionCellWrapper(cell, 10, state_is_tuple=True)
 
@@ -118,7 +118,7 @@ def generator(n_samples, wordmap_len, naw_r, naw_c, seq_len=None, gt=None):
 
         # get the LightLSTM cells and wrap them with dropout
         cells = []
-        for scope in range(FLAGS.GEN_GRU_LAYERS):
+        for scope in range(FLAGS.GEN_LSTM_LAYERS):
             cell = LightLSTM(num_neurons, num_neurons, scope=scope)
 
             if attention:
